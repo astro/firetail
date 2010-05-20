@@ -197,6 +197,8 @@ function setupStreamATOM(res, reqId, session) {
 			   function(node, entries) {
 			       sys.puts("writing to " + res + " for " + node);
 			       entries.forEach(function(entry) {
+				   entry.c("link", { rel: "via",
+						     href: node });
 				   entry.stripXmlns(defaultXmlns);
 				   res.write(entry.toString()+"\r\n");
 			       });
