@@ -23,7 +23,6 @@ xmpp.StanzaBuilder.prototype.getChildren = function(name) {
     return children;
 };
 xmpp.StanzaBuilder.prototype.stripXmlns = function(parentXmlns) {
-    sys.puts("stripXmlns for " + this.name + ": " + JSON.stringify(parentXmlns));
     for(var prefix in parentXmlns) {
 	var xmlnsAttr;
 	if (prefix == "")
