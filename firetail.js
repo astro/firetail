@@ -8,13 +8,14 @@ var SERVER = "xmpp.superfeedr.com";
 var PORT = 5222;
 var DOMAIN = "superfeedr.com";
 var PUBSUB_SERVICE = "firehoser.superfeedr.com";
-var sessions = {};
+var SUBSCRIBE_PATH = "/subscription/";
 
 var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 		     geo: 'http://www.georss.org/georss',
 		     as: 'http://activitystrea.ms/spec/1.0/',
 		     sf: 'http://superfeedr.com/xmpp-pubsub-ext'
 		   };
+var sessions = {};
 
 
 xmpp.StanzaBuilder.prototype.getChildren = function(name) {
@@ -338,8 +339,8 @@ http.createServer(function(req, res) {
 		handleWithSession(req, res, account, reqId, setupStreamATOM);
 	    } else if (req.method == "GET" && req.url == "/pubsub.json") {
 		handleWithSession(req, res, account, reqId, setupStreamJSON);
-	    } else if (req.method == "POST" && req.url.indexOf("/subscribe/") == 0) {
-		var node = decodeURIComponent(req.url.substr("/subscribe/".length));
+	    } else if (req.method == "POST" && req.url.indexOf(SUBSCRIBE_PATH) == 0) {
+		var node = decodeURIComponent(req.url.substr(SUBSCRIBE_PATH.length));
 		sys.puts("node: "+node);
 		handleWithSession(req, res, account, reqId,
 				  setupRequest(function(session) {
@@ -347,6 +348,21 @@ http.createServer(function(req, res) {
 					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
 					  c("subscribe", {node: node,
 							  jid: session.conn.user+'@'+session.conn.server});
+				  }, function(code, el) {
+				      res.writeHead(code, {"Content-type": "application/xml"});
+				      if (el)
+					  res.write(el.toString());
+				      res.end();
+				  }));
+	    } else if (req.method == "DELETE" && req.url.indexOf(SUBSCRIBE_PATH) == 0) {
+		var node = decodeURIComponent(req.url.substr(SUBSCRIBE_PATH.length));
+		sys.puts("node: "+node);
+		handleWithSession(req, res, account, reqId,
+				  setupRequest(function(session) {
+				      return xmpp.iq({type: "set"}).
+					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
+					  c("unsubscribe", {node: node,
+							    jid: session.conn.user+'@'+session.conn.server});
 				  }, function(code, el) {
 				      res.writeHead(code, {"Content-type": "application/xml"});
 				      if (el)
