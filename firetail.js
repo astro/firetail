@@ -254,7 +254,7 @@ function setupStreamJSON(res, reqId, session) {
 			   function(node, entries) {
 			       sys.puts("writing to " + res + " for " + node);
 			       entries.forEach(function(entry) {
-				   var json = {};
+				   var json = {via: node};
 				   xmlToAttr(entry, "id", json);
 				   xmlToAttr(entry, "title", json);
 				   xmlToAttr(entry, "published", json);
