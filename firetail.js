@@ -22,6 +22,16 @@ xmpp.StanzaBuilder.prototype.getChildren = function(name) {
     });
     return children;
 };
+xmpp.StanzaBuilder.prototype.getChildText = function(name) {
+    var text = null;
+    this.tags.forEach(function(tag) {
+	if (!text && tag.name == name)
+	{
+	    text = tag.getText();
+	}
+    });
+    return text;
+};
 xmpp.StanzaBuilder.prototype.stripXmlns = function(parentXmlns) {
     for(var prefix in parentXmlns) {
 	var xmlnsAttr;
@@ -206,6 +216,54 @@ function setupStreamATOM(res, reqId, session) {
 			   });
 }
 
+function xmlToAttr(el, name, json) {
+    var text = el.getChildText(name);
+    if (text)
+	json[name] = text;
+}
+function xmlAttrToAttr(el, name, json) {
+    var text = el.getAttribute(name);
+    if (text)
+	json[name] = text;
+}
+function xmlToLink(linkEl) {
+    var json = {};
+    xmlAttrToAttr(linkEl, "rel", json);
+    xmlAttrToAttr(linkEl, "href", json);
+    xmlAttrToAttr(linkEl, "type", json);
+    xmlAttrToAttr(linkEl, "title", json);
+    return json;
+}
+function xmlToAuthor(authorEl) {
+    var json = {};
+    xmlToAttr(authorEl, "name", json);
+    xmlToAttr(authorEl, "uri", json);
+    xmlToAttr(authorEl, "email", json);
+    return json;
+}
+function setupStreamJSON(res, reqId, session) {
+    res.writeHead(200, {'Content-type': 'application/json'});
+    res.flush();
+    res._hasBody = true;
+    session.onNotification(reqId,
+			   function(node, entries) {
+			       sys.puts("writing to " + res + " for " + node);
+			       entries.forEach(function(entry) {
+				   var json = {};
+				   xmlToAttr(entry, "id", json);
+				   xmlToAttr(entry, "title", json);
+				   xmlToAttr(entry, "published", json);
+				   xmlToAttr(entry, "content", json);
+				   xmlToAttr(entry, "summary", json);
+				   json['links'] = entry.getChildren("link").map(xmlToLink);
+				   json['authors'] = entry.getChildren("author").map(xmlToAuthor);
+				   var line = JSON.stringify(json) + "\n";
+				   res.write(line.length + "\n" + line);
+			       });
+			       res.flush();
+			   });
+}
+
 /* req:: HTTP.ServerRequest
    result:: null or [String, String]
 */
@@ -239,6 +297,8 @@ http.createServer(function(req, res) {
 	if (account) {
 	    if (req.method == "GET" && req.url == "/pubsub.xml") {
 		handleWithSession(req, res, account, reqId, setupStreamATOM);
+	    } else if (req.method == "GET" && req.url == "/pubsub.json") {
+		handleWithSession(req, res, account, reqId, setupStreamJSON);
 	    } else {
 		res.writeHead(404, {});
 		res.end();
