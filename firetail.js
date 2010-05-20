@@ -86,8 +86,10 @@ function Session(account) {
     sys.puts("Connect for "+account);
     this.conn.connect(user, server, pass,
 		      function(status, condition) {
-			  if (status == xmpp.Status.CONNECTED)
+			  if (status == xmpp.Status.CONNECTED) {
 			      session.ready('ok');
+			      this.send(xmpp.presence(null));
+			  }
 			  else if (status == xmpp.Status.AUTHFAIL)
 			      session.ready('auth');
 			  else if (status == xmpp.Status.CONNFAIL ||
