@@ -52,7 +52,6 @@ function Session(account) {
     var notifyCallbacks = {};
     this.onNotification = function(id, cb) { notifyCallbacks[id] = cb; };
     this.conn.addHandler(function(msg) {
-	sys.puts("notifyCallbacks: "+Object.keys(notifyCallbacks));
 	for(var id in notifyCallbacks) {
 	    sys.puts("notify callback for "+id);
 	    notifyCallbacks[id](msg);
@@ -89,6 +88,48 @@ function withSession(account, reqId, cb) {
     return session;
 }
 
+/* Controllers */
+function handleWithSession(req, res, account, reqId, cb) {
+    var session = withSession(account, reqId,
+			      function(event, session) {
+				  sys.puts(reqId + " with: " + event);
+				  if (event == 'ok') {
+				      session.onEnd(reqId, res.end);
+				      cb(res, reqId, session);
+				  }
+				  else if (event == 'auth') {
+				      res.writeHead(401, {});
+				      res.end();
+				  }
+				  else {
+				      res.writeHead(501, {});
+				      res.end();
+				  }
+			      });
+    req.socket.addListener('end',
+			   function() {
+			       sys.puts(reqId+" req end");
+			       session.unref(reqId);
+			   });
+    req.socket.addListener('error',
+			   function(e) {
+			       sys.puts(reqId+" req socket error: "+e);
+			       session.unref(reqId);
+			   });
+}
+
+function setupStreamATOM(res, reqId, session) {
+    res.writeHead(200, {'Content-type': 'application/atom+xml'});
+    res.flush();
+    res._hasBody = true;
+    session.onNotification(reqId,
+			   function(msg) {
+			       sys.puts("writing to " + res);
+			       res.write(msg.toString()+"\r\n");
+			       res.flush();
+			   });
+}
+
 /* req:: HTTP.ServerRequest
    result:: null or [String, String]
 */
@@ -111,7 +152,6 @@ function reqAuth(req) {
 }
 
 var nextReqId = 0;
-
 http.createServer(function(req, res) {
     try {
 	var reqId = nextReqId;
@@ -119,54 +159,17 @@ http.createServer(function(req, res) {
 
 	sys.puts(req.method + " " + req.url);
 
-	if (req.method == "GET" &&
-	    req.url == "/pubsub.xml")
-	{
-	    var account = reqAuth(req);
-	    if (account)
-	    {
-		var session = withSession(account, reqId,
-					  function(event, session) {
-					      sys.puts(reqId + " with: " + event);
-					      if (event == 'ok') {
-						  res.writeHead(200, {'Content-type': 'application/atom+xml'});
-						  res.flush();
-						  res._hasBody = true;
-						  session.onNotification(reqId,
-									 function(msg) {
-									     sys.puts("writing to " + res);
-									     res.write(msg.toString()+"\r\n");
-									     res.flush();
-									 });
-						  session.onEnd(reqId, res.end);
-					      }
-					      else if (event == 'auth') {
-						  res.writeHead(401, {});
-						  res.end();
-					      }
-					      else {
-						  res.writeHead(501, {});
-						  res.end();
-					      }
-					  });
-		req.socket.addListener('end',
-				       function() {
-					   sys.puts(reqId+" req end");
-					   session.unref(reqId);
-				       });
-		req.socket.addListener('error',
-				       function(e) {
-					   sys.puts(reqId+" req socket error: "+e);
-					   session.unref(reqId);
-				       });
-	    }
-	    else {
-		res.writeHead(401, {});
+	var account = reqAuth(req);
+	if (account) {
+	    if (req.method == "GET" && req.url == "/pubsub.xml") {
+		handleWithSession(req, res, account, reqId, setupStreamATOM);
+	    } else {
+		res.writeHead(404, {});
 		res.end();
 	    }
 	}
 	else {
-	    res.writeHead(404, {});
+	    res.writeHead(401, {});
 	    res.end();
 	}
     } catch (e) {
