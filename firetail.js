@@ -132,6 +132,7 @@ function Session(account) {
 		}
 	    });
 	});
+	return true;
     }, null, "message", null, null, PUBSUB_SERVICE);
 
     /* Individual un-using, with shutdown */
@@ -267,6 +268,41 @@ function setupStreamJSON(res, reqId, session) {
 			   });
 }
 
+function setupRequest(iqGenerator, doneFun) {
+    return function(req, reqId, session) {
+	var id = reqId.toString();
+	stanza = iqGenerator(session);
+	sys.puts("generated: "+stanza.toString());
+	stanza.attr['to'] = PUBSUB_SERVICE;
+	stanza.attr['id'] = id;
+	sys.puts("augmented: "+stanza.toString());
+	session.conn.send(stanza);
+	session.conn.addHandler(function(response) {
+	    var type = response.getAttribute("type"), code, el = null;
+	    if (type == "result") {
+		code = 200;
+		response.getChildren("pubsub").forEach(function(pubsubEl) {
+		    pubsubEl.getChildren("subscription").forEach(function(subscriptionEl) {
+			el = subscriptionEl;
+		    });
+		});
+	    } else {
+		var code = 502;
+		response.getChildren("error").forEach(function(errorEl) {
+		    el = errorEl;
+		    var codeAttr = errorEl.getAttribute("code");
+		    if (codeAttr)
+			code = Number(codeAttr);
+		});
+	    }
+
+	    session.unref(reqId);  // one session process less
+	    doneFun(code, el);
+	    return false;  // remove listener now
+	}, null, "iq", null, id, PUBSUB_SERVICE);
+    };
+}
+
 /* req:: HTTP.ServerRequest
    result:: null or [String, String]
 */
@@ -302,6 +338,21 @@ http.createServer(function(req, res) {
 		handleWithSession(req, res, account, reqId, setupStreamATOM);
 	    } else if (req.method == "GET" && req.url == "/pubsub.json") {
 		handleWithSession(req, res, account, reqId, setupStreamJSON);
+	    } else if (req.method == "POST" && req.url.indexOf("/subscribe/") == 0) {
+		var node = decodeURIComponent(req.url.substr("/subscribe/".length));
+		sys.puts("node: "+node);
+		handleWithSession(req, res, account, reqId,
+				  setupRequest(function(session) {
+				      return xmpp.iq({type: "set"}).
+					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
+					  c("subscribe", {node: node,
+							  jid: session.conn.user+'@'+session.conn.server});
+				  }, function(code, el) {
+				      res.writeHead(code, {"Content-type": "application/xml"});
+				      if (el)
+					  res.write(el.toString());
+				      res.end();
+				  }));
 	    } else {
 		res.writeHead(404, {});
 		res.end();
