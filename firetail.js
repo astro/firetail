@@ -7,6 +7,54 @@ var base64 = require("base64");
 var server = "superfeedr.com";
 var sessions = {};
 
+var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
+		     geo: 'http://www.georss.org/georss',
+		     as: 'http://activitystrea.ms/spec/1.0/',
+		     sf: 'http://superfeedr.com/xmpp-pubsub-ext'
+		   };
+
+
+xmpp.StanzaBuilder.prototype.getChildren = function(name) {
+    var children = [];
+    this.tags.forEach(function(tag) {
+	if (tag.name == name)
+	    children.push(tag);
+    });
+    return children;
+};
+xmpp.StanzaBuilder.prototype.stripXmlns = function(parentXmlns) {
+    sys.puts("stripXmlns for " + this.name + ": " + JSON.stringify(parentXmlns));
+    for(var prefix in parentXmlns) {
+	var xmlnsAttr;
+	if (prefix == "")
+	    xmlnsAttr = "xmlns";
+	else
+	    xmlnsAttr = "xmlns:" + prefix;
+
+	/* Remove superfluous xmlns */
+	if (this.attr[xmlnsAttr] == parentXmlns[prefix])
+	    delete this.attr[xmlnsAttr];
+
+	/* Learn all xmlns */
+	currentXmlns = Object.create(parentXmlns);
+	for(var attr in this.attr) {
+	    var m;
+	    if (attr == "xmlns")
+		currentXmlns[''] = this.attr[attr];
+	    else if (m = /^xmlns:(.+)/.exec(attr)) {
+		var prefix = m[1];
+		currentXmlns[prefix] = this.attr[attr];
+	    }
+	}
+	/* Apply to children */
+	this.tags = this.tags.map(function(tag) {
+	    if (tag.stripXmlns)
+		tag.stripXmlns(currentXmlns);
+	    return tag;
+	});
+    }
+};
+
 function Session(account) {
     var user = account[0], pass = account[1];
 
@@ -51,12 +99,26 @@ function Session(account) {
     /* Notification management */
     var notifyCallbacks = {};
     this.onNotification = function(id, cb) { notifyCallbacks[id] = cb; };
-    this.conn.addHandler(function(msg) {
-	for(var id in notifyCallbacks) {
-	    sys.puts("notify callback for "+id);
-	    notifyCallbacks[id](msg);
-	}
-    });
+    this.conn.addHandler(function(msgEl) {
+	msgEl.getChildren("event").forEach(function(eventEl) {
+	    eventEl.getChildren("items").forEach(function(itemsEl) {
+		var node = itemsEl.getAttribute("node");
+		if (node)
+		{
+		    var entries = [];
+		    itemsEl.getChildren("item").forEach(function(itemEl) {
+			itemEl.getChildren("entry").forEach(function(entryEl) {
+			    entries.push(entryEl);
+			});
+		    });
+		    if (entries.length > 0)
+			for(var id in notifyCallbacks) {
+			    notifyCallbacks[id](node, entries);
+			}
+		}
+	    });
+	});
+    }, null, "message");
 
     /* Individual un-using, with shutdown */
     this.unref = function(id) {
@@ -120,12 +182,23 @@ function handleWithSession(req, res, account, reqId, cb) {
 
 function setupStreamATOM(res, reqId, session) {
     res.writeHead(200, {'Content-type': 'application/atom+xml'});
+    res.write("<feed");
+    for(var prefix in defaultXmlns) {
+	res.write(" xmlns");
+	if (prefix != '')
+	    res.write(":"+prefix);
+	res.write("=\""+defaultXmlns[prefix]+"\"");
+    }
+    res.write(">");
     res.flush();
     res._hasBody = true;
     session.onNotification(reqId,
-			   function(msg) {
-			       sys.puts("writing to " + res);
-			       res.write(msg.toString()+"\r\n");
+			   function(node, entries) {
+			       sys.puts("writing to " + res + " for " + node);
+			       entries.forEach(function(entry) {
+				   entry.stripXmlns(defaultXmlns);
+				   res.write(entry.toString()+"\r\n");
+			       });
 			       res.flush();
 			   });
 }
