@@ -4,7 +4,10 @@ var xmpp = require("xmpp");
 var base64 = require("base64");
 
 
-var server = "superfeedr.com";
+var SERVER = "xmpp.superfeedr.com";
+var PORT = 5222;
+var DOMAIN = "superfeedr.com";
+var PUBSUB_SERVICE = "firehoser.superfeedr.com";
 var sessions = {};
 
 var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
@@ -88,13 +91,13 @@ function Session(account) {
 	}
     };
 
-    this.conn = new xmpp.Connection("xmpp.superfeedr.com", 5222);
+    this.conn = new xmpp.Connection(SERVER, PORT);
     /*this.conn.log = function(level, message) {
 	sys.puts("[" + level + "] " + message);
     };*/
     var session = this;
     sys.puts("Connect for "+account);
-    this.conn.connect(user, server, pass,
+    this.conn.connect(user, DOMAIN, pass,
 		      function(status, condition) {
 			  if (status == xmpp.Status.CONNECTED) {
 			      session.ready('ok');
@@ -129,7 +132,7 @@ function Session(account) {
 		}
 	    });
 	});
-    }, null, "message");
+    }, null, "message", null, null, PUBSUB_SERVICE);
 
     /* Individual un-using, with shutdown */
     this.unref = function(id) {
