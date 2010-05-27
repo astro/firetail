@@ -4,8 +4,6 @@ var xmpp = require("xmpp");
 var base64 = require("base64");
 
 
-var SERVER = "xmpp.superfeedr.com";
-var PORT = 5222;
 var DOMAIN = "superfeedr.com";
 var PUBSUB_SERVICE = "firehoser.superfeedr.com";
 var SUBSCRIBE_PATH = "/subscription/";
@@ -18,25 +16,7 @@ var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 var sessions = {};
 
 
-xmpp.StanzaBuilder.prototype.getChildren = function(name) {
-    var children = [];
-    this.tags.forEach(function(tag) {
-	if (tag.name == name)
-	    children.push(tag);
-    });
-    return children;
-};
-xmpp.StanzaBuilder.prototype.getChildText = function(name) {
-    var text = null;
-    this.tags.forEach(function(tag) {
-	if (!text && tag.name == name)
-	{
-	    text = tag.getText();
-	}
-    });
-    return text;
-};
-xmpp.StanzaBuilder.prototype.stripXmlns = function(parentXmlns) {
+xmpp.Element.prototype.stripXmlns = function(parentXmlns) {
     for(var prefix in parentXmlns) {
 	var xmlnsAttr;
 	if (prefix == "")
@@ -45,25 +25,25 @@ xmpp.StanzaBuilder.prototype.stripXmlns = function(parentXmlns) {
 	    xmlnsAttr = "xmlns:" + prefix;
 
 	/* Remove superfluous xmlns */
-	if (this.attr[xmlnsAttr] == parentXmlns[prefix])
-	    delete this.attr[xmlnsAttr];
+	if (this.attrs[xmlnsAttr] == parentXmlns[prefix])
+	    delete this.attrs[xmlnsAttr];
 
 	/* Learn all xmlns */
 	currentXmlns = Object.create(parentXmlns);
-	for(var attr in this.attr) {
+	for(var attr in this.attrs) {
 	    var m;
 	    if (attr == "xmlns")
-		currentXmlns[''] = this.attr[attr];
+		currentXmlns[''] = this.attrs[attr];
 	    else if (m = /^xmlns:(.+)/.exec(attr)) {
 		var prefix = m[1];
-		currentXmlns[prefix] = this.attr[attr];
+		currentXmlns[prefix] = this.attrs[attr];
 	    }
 	}
 	/* Apply to children */
-	this.tags = this.tags.map(function(tag) {
-	    if (tag.stripXmlns)
-		tag.stripXmlns(currentXmlns);
-	    return tag;
+	this.children = this.children.map(function(el) {
+	    if (el.stripXmlns)
+		el.stripXmlns(currentXmlns);
+	    return el;
 	});
     }
 };
@@ -92,54 +72,70 @@ function Session(account) {
 	}
     };
 
-    this.conn = new xmpp.Connection(SERVER, PORT);
-    /*this.conn.log = function(level, message) {
-	sys.puts("[" + level + "] " + message);
-    };*/
+    this.conn = new xmpp.Client({ jid: new xmpp.JID(user, DOMAIN),
+				  password: pass
+				});
+    this.conn.allowTLS = false;  // raw speed is what we need
     var session = this;
-    sys.puts("Connect for "+account);
-    this.conn.connect(user, DOMAIN, pass,
-		      function(status, condition) {
-			  if (status == xmpp.Status.CONNECTED) {
+    this.conn.addListener('online',
+			  function() {
 			      session.ready('ok');
-			      this.send(xmpp.presence(null));
-			  }
-			  else if (status == xmpp.Status.AUTHFAIL)
+			      this.send(new xmpp.Element('presence'));
+			  });
+    this.conn.addListener('authFail',
+			  function() {
 			      session.ready('auth');
-			  else if (status == xmpp.Status.CONNFAIL ||
-				   status == xmpp.Status.DISCONNECTED)
+			  });
+    this.conn.addListener('error',
+			  function() {
 		              session.ready('error');
-		      });
+			  });
+    sys.puts("Connect for "+account);
 
     /* Notification management */
     var notifyCallbacks = {};
+    var iqCallbacks = {};
     this.onNotification = function(id, cb) { notifyCallbacks[id] = cb; };
-    this.conn.addHandler(function(msgEl) {
-	msgEl.getChildren("event").forEach(function(eventEl) {
-	    eventEl.getChildren("items").forEach(function(itemsEl) {
-		var node = itemsEl.getAttribute("node");
-		if (node)
-		{
-		    var entries = [];
-		    itemsEl.getChildren("item").forEach(function(itemEl) {
-			itemEl.getChildren("entry").forEach(function(entryEl) {
-			    entries.push(entryEl);
-			});
-		    });
-		    if (entries.length > 0)
-			for(var id in notifyCallbacks) {
-			    notifyCallbacks[id](node, entries);
-			}
-		}
-	    });
-	});
-	return true;
-    }, null, "message", null, null, PUBSUB_SERVICE);
+    this.conn.addListener('stanza',
+			  function(stanza) {
+			      if (stanza.is('message')) {
+				  stanza.getChildren("event").forEach(function(eventEl) {
+				      eventEl.getChildren("items").forEach(function(itemsEl) {
+					  var node = itemsEl.attrs.node;
+					  if (node)
+					  {
+					      var entries = [];
+					      itemsEl.getChildren("item").forEach(function(itemEl) {
+						  itemEl.getChildren("entry").forEach(function(entryEl) {
+						      entries.push(entryEl);
+						  });
+					      });
+					      if (entries.length > 0)
+						  for(var id in notifyCallbacks) {
+						      notifyCallbacks[id](node, entries);
+						  }
+					  }
+				      });
+				  });
+			      } else if (stanza.name == 'iq' &&
+					 stanza.attrs.from == PUBSUB_SERVICE) {
+				  var id = stanza.attrs.id;
+				  if (iqCallbacks[id]) {
+				      iqCallbacks[id](stanza);
+				      delete iqCallbacks[id];
+				  }
+			      }
+			  });
+
+    this.addIqListener = function(id, cb) {
+	iqCallbacks[id.toString()] = cb;
+    };
 
     /* Individual un-using, with shutdown */
     this.unref = function(id) {
 	delete readyCallbacks[id];
 	delete notifyCallbacks[id];
+	delete iqCallbacks[id.toString()];
 
 	/* Are callbacks still registered? */
 	for(var id in readyCallbacks)
@@ -149,7 +145,7 @@ function Session(account) {
 	/* No: */
 	sys.puts("Shutdown for "+account);
 	sessions[account] = null;
-	this.conn.socket.end();
+	this.conn.end();
     };
 }
 
@@ -227,7 +223,7 @@ function xmlToAttr(el, name, json) {
 	json[name] = text;
 }
 function xmlAttrToAttr(el, name, json) {
-    var text = el.getAttribute(name);
+    var text = el.attrs[name];
     if (text)
 	json[name] = text;
 }
@@ -271,36 +267,35 @@ function setupStreamJSON(res, reqId, session) {
 
 function setupRequest(iqGenerator, doneFun) {
     return function(req, reqId, session) {
-	var id = reqId.toString();
-	stanza = iqGenerator(session);
+	stanza = iqGenerator(session).root();
 	sys.puts("generated: "+stanza.toString());
-	stanza.attr['to'] = PUBSUB_SERVICE;
-	stanza.attr['id'] = id;
+	stanza.attrs.to = PUBSUB_SERVICE;
+	stanza.attrs.id = reqId.toString();
 	sys.puts("augmented: "+stanza.toString());
 	session.conn.send(stanza);
-	session.conn.addHandler(function(response) {
-	    var type = response.getAttribute("type"), code, el = null;
-	    if (type == "result") {
-		code = 200;
-		response.getChildren("pubsub").forEach(function(pubsubEl) {
-		    pubsubEl.getChildren("subscription").forEach(function(subscriptionEl) {
-			el = subscriptionEl;
-		    });
-		});
-	    } else {
-		var code = 502;
-		response.getChildren("error").forEach(function(errorEl) {
-		    el = errorEl;
-		    var codeAttr = errorEl.getAttribute("code");
-		    if (codeAttr)
-			code = Number(codeAttr);
-		});
-	    }
-
-	    session.unref(reqId);  // one session process less
-	    doneFun(code, el);
-	    return false;  // remove listener now
-	}, null, "iq", null, id, PUBSUB_SERVICE);
+	session.addIqListener(reqId,
+			      function(response) {
+				  var type = response.attrs.type, code, el = null;
+				  if (type == "result") {
+				      code = 200;
+				      response.getChildren("pubsub").forEach(function(pubsubEl) {
+					  pubsubEl.getChildren("subscription").forEach(function(subscriptionEl) {
+					      el = subscriptionEl;
+					  });
+				      });
+				  } else {
+				      var code = 502;
+				      response.getChildren("error").forEach(function(errorEl) {
+					  el = errorEl;
+					  var codeAttr = errorEl.attrs.code;
+					  if (codeAttr)
+					      code = Number(codeAttr);
+				      });
+				  }
+				  
+				  session.unref(reqId);  // one session process less
+				  doneFun(code, el);
+			      });
     };
 }
 
@@ -344,10 +339,11 @@ http.createServer(function(req, res) {
 		sys.puts("node: "+node);
 		handleWithSession(req, res, account, reqId,
 				  setupRequest(function(session) {
-				      return xmpp.iq({type: "set"}).
+				      return new xmpp.Element('iq',
+							      {type: "set"}).
 					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
 					  c("subscribe", {node: node,
-							  jid: session.conn.user+'@'+session.conn.server});
+							  jid: session.conn.jid.bare().toString()});
 				  }, function(code, el) {
 				      res.writeHead(code, {"Content-type": "application/xml"});
 				      if (el)
@@ -359,10 +355,10 @@ http.createServer(function(req, res) {
 		sys.puts("node: "+node);
 		handleWithSession(req, res, account, reqId,
 				  setupRequest(function(session) {
-				      return xmpp.iq({type: "set"}).
+				      return new xmpp.Element('iq', {type: "set"}).
 					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
 					  c("unsubscribe", {node: node,
-							    jid: session.conn.user+'@'+session.conn.server});
+							    jid: session.conn.jid.bare().toString()});
 				  }, function(code, el) {
 				      res.writeHead(code, {"Content-type": "application/xml"});
 				      if (el)

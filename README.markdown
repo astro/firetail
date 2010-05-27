@@ -22,7 +22,7 @@ Unsubscribe from a node:
     curl -u $CREDS -X DELETE http://localhost:8888/subscription/http%3A%2F%2Ftwitter.com%2Fstatuses%2Fuser_timeline%2F61287780.rss
 
 ## TODO
-* Improve xmppjs
 * Expose [PubSub archive functionality](http://xmpp.org/extensions/xep-0060.html#subscriber-retrieve-requestall)
-* Implement deflate encoding/compression
+* Implement deflate encoding/compression with [node-compress](http://github.com/waveto/node-compress)
 * Add proper keep-alive support (in http.js?)
+* presence should depend on a firehose listener
