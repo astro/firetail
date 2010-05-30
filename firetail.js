@@ -1,3 +1,7 @@
+require.paths.push("deps/node-base64/build/default",
+		   "deps/node-expat/build/default",
+		   "deps/node-xmpp/lib");
+
 var http = require('http');
 var sys = require('sys');
 var xmpp = require("xmpp");

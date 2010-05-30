@@ -3,8 +3,10 @@ An HTTP REST to XMPP PubSub gateway for server-side JavaScript.
 
 ## Dependencies
 * [node.js](http://github.com/ry/node)
-* [node-xmpp](http://github.com/astro/node-xmpp) and [node-expat](http://github.com/astro/node-xmpp)
+* [node-xmpp](http://github.com/astro/node-xmpp) and [node-expat](http://github.com/astro/node-expat)
 * [node-base64](http://github.com/brainfucker/node-base64)
+
+Use a fairly recent version of node.js and run `./bootstrap.sh`
 
 ## Usage
 First, set your Superfeedr.com credentials:
