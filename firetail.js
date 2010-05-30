@@ -60,7 +60,7 @@ function Session(account) {
     this.onReady = function(id, cb) { readyCallbacks[id] = cb; };
     this.onEnd = function(id, todo) { };
     this.ready = function(status) {
-	sys.puts(account + " " + status);
+	sys.puts(user + " " + status);
 	for(var id in readyCallbacks)
 	    readyCallbacks[id](status);
 	readyCallbacks = {};
@@ -94,7 +94,7 @@ function Session(account) {
 			  function() {
 		              session.ready('error');
 			  });
-    sys.puts("Connect for "+account);
+    sys.puts("Connect for "+account[0]);
 
     /* Notification management */
     var notifyCallbacks = {};
@@ -147,7 +147,7 @@ function Session(account) {
 	for(var id in notifyCallbacks)
 	    return;
 	/* No: */
-	sys.puts("Shutdown for "+account);
+	sys.puts("Shutdown for "+account[0]);
 	sessions[account] = null;
 	this.conn.end();
     };
@@ -157,7 +157,6 @@ function withSession(account, reqId, cb) {
     var session = sessions[account];
     if (!session)
 	sessions[account] = session = new Session(account);
-    sys.puts("session: " + session);
     session.onReady(reqId,
 		    function(event) {
 			sys.puts("event " + event);
@@ -170,7 +169,7 @@ function withSession(account, reqId, cb) {
 function handleWithSession(req, res, account, reqId, cb) {
     var session = withSession(account, reqId,
 			      function(event, session) {
-				  sys.puts(reqId + " with: " + event);
+				  sys.puts("req " + reqId + " got session with: " + event);
 				  if (event == 'ok') {
 				      session.onEnd(reqId, res.end);
 				      cb(res, reqId, session);
