@@ -1,10 +1,9 @@
 # FireTail
 An HTTP REST to XMPP PubSub gateway for server-side JavaScript.
 
-## Requirements
+## Dependencies
 * [node.js](http://github.com/ry/node)
-* My branch of [xmppjs](http://github.com/astro/xmppjs)
-* [node-xml](http://github.com/robrighter/node-xml) for xmppjs
+* [node-xmpp](http://github.com/astro/node-xmpp) and [node-expat](http://github.com/astro/node-xmpp)
 * [node-base64](http://github.com/brainfucker/node-base64)
 
 ## Usage
