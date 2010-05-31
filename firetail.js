@@ -12,14 +12,13 @@ var web = require('node-router').getServer();
 
 var DOMAIN = "superfeedr.com";
 var PUBSUB_SERVICE = "firehoser.superfeedr.com";
-var SUBSCRIBE_PATH = "/subscriptions";
+var NS_PUBSUB = 'http://jabber.org/protocol/pubsub';
 
 var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 		     geo: 'http://www.georss.org/georss',
 		     as: 'http://activitystrea.ms/spec/1.0/',
 		     sf: 'http://superfeedr.com/xmpp-pubsub-ext'
 		   };
-var sessions = {};
 
 
 xmpp.Element.prototype.stripXmlns = function(parentXmlns) {
@@ -54,13 +53,16 @@ xmpp.Element.prototype.stripXmlns = function(parentXmlns) {
     }
 };
 
+/* Global registry of active XMPP sessions per account */
+var sessions = {};
+
 function Session(account) {
     var user = account[0], pass = account[1];
 
     /* Connection management */
-    var readyCallbacks = {};
+    var readyCallbacks = {}, endCallbacks = {};
     this.onReady = function(id, cb) { readyCallbacks[id] = cb; };
-    this.onEnd = function(id, todo) { };
+    this.onEnd = function(id, cb) { endCallbacks[id] = cb; };
     this.ready = function(status) {
 	sys.puts(user + " " + status);
 	for(var id in readyCallbacks)
@@ -96,6 +98,12 @@ function Session(account) {
 			  function() {
 		              session.ready('error');
 			  });
+    this.conn.addListener('end',
+			  function() {
+			      for(var id in endCallbacks) {
+				  endCallbacks[id]();
+			      }
+			  });
     sys.puts("Connect for "+account[0]);
 
     /* Notification management */
@@ -104,6 +112,7 @@ function Session(account) {
     this.onNotification = function(id, cb) { notifyCallbacks[id] = cb; };
     this.conn.addListener('stanza',
 			  function(stanza) {
+			      sys.puts('STANZA: '+stanza.toString());
 			      if (stanza.is('message')) {
 				  stanza.getChildren("event").forEach(function(eventEl) {
 				      eventEl.getChildren("items").forEach(function(itemsEl) {
@@ -155,6 +164,7 @@ function Session(account) {
     };
 }
 
+
 function withSession(account, reqId, cb) {
     var session = sessions[account];
     if (!session)
@@ -167,12 +177,34 @@ function withSession(account, reqId, cb) {
     return session;
 }
 
+
+/* req:: HTTP.ServerRequest
+   result:: null or [String, String]
+*/
+function reqAuth(req) {
+    var auth = req.headers['authorization'];
+    if (auth)
+    {
+	var m = /^Basic (\S+)/.exec(auth);
+	if (m[1])
+	{
+	    var up = /^(.+?):(.+)/.exec(base64.decode(m[1]));
+	    var user = up[1], pass = up[2];
+	    return [user, pass];
+	}
+	else
+	    return null;
+    }
+    else
+	return null;
+}
+
 /* Controllers */
+
 var nextReqId = 0;
 
-function handleWithSession(req, res, cb) {
-    var reqId = nextReqId;
-    nextReqId++;
+function Action(req, res) {
+    var self = this;
 
     var account = reqAuth(req);
     if (!account) {
@@ -181,58 +213,95 @@ function handleWithSession(req, res, cb) {
 	return;
     }
 
-    var session = withSession(account, reqId,
-			      function(event, session) {
-				  sys.puts("req " + reqId + " got session with: " + event);
-				  if (event == 'ok') {
-				      session.onEnd(reqId, res.end);
-				      cb(res, reqId, session);
-				  }
-				  else if (event == 'auth') {
-				      res.writeHead(401, {});
-				      res.end();
-				  }
-				  else {
-				      res.writeHead(501, {});
-				      res.end();
-				  }
-			      });
+    self.res = res;
+    self.reqId = nextReqId;
+    nextReqId++;
+
+    self.session = withSession(account, self.reqId, function(event, session) { self.onSession(event, session); });
+    /* Catch XMPP session termination */
+    self.session.onEnd(self.reqId, res.end);
+
+    /* Catch HTTP request termination */
     req.socket.addListener('end',
 			   function() {
-			       sys.puts(reqId+" req end");
-			       session.unref(reqId);
+			       sys.puts(self.reqId+" req end");
+			       self.session.unref(self.reqId);
 			   });
     req.socket.addListener('error',
 			   function(e) {
-			       sys.puts(reqId+" req socket error: "+e);
-			       session.unref(reqId);
+			       sys.puts(self.reqId+" req socket error: "+e);
+			       //self.session.unref(self.reqId);  // needed?
 			   });
 }
+Action.prototype.onSession = function(event, session) {
+    var self = this;
+    self.session = session;
+    sys.puts("req " + self.reqId + " got session with: " + event);
 
-function setupStreamATOM(res, reqId, session) {
-    res.writeHead(200, {'Content-type': 'application/atom+xml'});
-    res.write("<feed");
-    for(var prefix in defaultXmlns) {
-	res.write(" xmlns");
-	if (prefix != '')
-	    res.write(":"+prefix);
-	res.write("=\""+defaultXmlns[prefix]+"\"");
+    if (event == 'ok') {
+	try { self.onOnline(); }
+	catch (e) { sys.puts("onOnline: "+e.toString()); }
+	if (self.onNotification) {
+	    self.session.onNotification(self.reqId,
+					function(node, entries) {
+					    self.onNotification(node, entries);
+					});
+	}
     }
-    res.write(">");
-    res.flush();
-    res._hasBody = true;
-    session.onNotification(reqId,
-			   function(node, entries) {
-			       sys.puts("writing to " + res + " for " + node);
-			       entries.forEach(function(entry) {
-				   entry.c("link", { rel: "via",
-						     href: node });
-				   entry.stripXmlns(defaultXmlns);
-				   res.write(entry.toString()+"\r\n");
-			       });
-			       res.flush();
-			   });
+    else if (event == 'auth') {
+	self.res.writeHead(401, {});
+	self.res.end();
+    }
+    else {
+	self.res.writeHead(501, {});
+	self.res.end();
+    }
+};
+
+function AtomStream(req, res) {
+    Action.call(this, req, res);
 }
+sys.inherits(AtomStream, Action);
+
+AtomStream.prototype.onOnline = function() {
+    this.res.writeHead(200, {'Content-type': 'application/atom+xml'});
+    this.res.write("<feed");
+    for(var prefix in defaultXmlns) {
+	this.res.write(" xmlns");
+	if (prefix != '')
+	    this.res.write(":"+prefix);
+	this.res.write("=\""+defaultXmlns[prefix]+"\"");
+    }
+    this.res.write(">\n");
+    this.res.flush();
+};
+
+AtomStream.prototype.onNotification = function(node, entries) {
+    var self = this;
+    sys.puts("writing to " + this.res + " for " + node);
+    entries.forEach(function(entry) {
+	sys.puts("this: "+this.toString());
+	entry.c("link", { rel: "via",
+			  href: node });
+	entry.stripXmlns(defaultXmlns);
+	entry.write(function(s) { self.res.write(s); });
+	self.res.write("\n");
+    });
+    self.res.flush();
+};
+
+function JsonStream(req, res) {
+    Action.call(this, req, res);
+}
+sys.inherits(JsonStream, Action);
+
+JsonStream.prototype.onOnline = function() {
+    this.res.writeHead(200, {'Content-type': 'application/json'});
+    this.res.flush();
+    this.res._hasBody = true;
+};
+
+/*** Helpers for XML to JSON conversion */
 
 function xmlToAttr(el, name, json) {
     var text = el.getChildText(name);
@@ -259,122 +328,121 @@ function xmlToAuthor(authorEl) {
     xmlToAttr(authorEl, "email", json);
     return json;
 }
-function setupStreamJSON(res, reqId, session) {
-    res.writeHead(200, {'Content-type': 'application/json'});
-    res.flush();
-    res._hasBody = true;
-    session.onNotification(reqId,
-			   function(node, entries) {
-			       sys.puts("writing to " + res + " for " + node);
-			       entries.forEach(function(entry) {
-				   var json = {via: node};
-				   xmlToAttr(entry, "id", json);
-				   xmlToAttr(entry, "title", json);
-				   xmlToAttr(entry, "published", json);
-				   xmlToAttr(entry, "content", json);
-				   xmlToAttr(entry, "summary", json);
-				   json['links'] = entry.getChildren("link").map(xmlToLink);
-				   json['authors'] = entry.getChildren("author").map(xmlToAuthor);
-				   var line = JSON.stringify(json) + "\n";
-				   res.write(line.length + "\n" + line);
-			       });
-			       res.flush();
-			   });
+
+JsonStream.prototype.onNotification = function(node, entries) {
+    var self = this;
+    sys.puts("writing to " + this.res + " for " + node);
+    entries.forEach(function(entry) {
+	var json = {via: node};
+	xmlToAttr(entry, "id", json);
+	xmlToAttr(entry, "title", json);
+	xmlToAttr(entry, "published", json);
+	xmlToAttr(entry, "content", json);
+	xmlToAttr(entry, "summary", json);
+	json['links'] = entry.getChildren("link").map(xmlToLink);
+	json['authors'] = entry.getChildren("author").map(xmlToAuthor);
+	var line = JSON.stringify(json) + "\n";
+	self.res.write(line.length + "\n" + line);
+    });
+    self.res.flush();
+};
+
+function IqRequest(req, res, stanza, resultFormatter) {
+    this.stanza = stanza;
+    this.resultFormatter = resultFormatter;
+    /* If session already established, this will lead to onOnline()
+       immediately */
+    Action.call(this, req, res);
 }
+sys.inherits(IqRequest, Action);
 
-function setupRequest(iqGenerator, doneFun) {
-    return function(req, reqId, session) {
-	stanza = iqGenerator(session).root();
-	sys.puts("generated: "+stanza.toString());
-	stanza.attrs.to = PUBSUB_SERVICE;
-	stanza.attrs.id = reqId.toString();
-	sys.puts("augmented: "+stanza.toString());
-	session.conn.send(stanza);
-	session.addIqListener(reqId,
-			      function(response) {
-				  var type = response.attrs.type, code, el = null;
-				  if (type == "result") {
-				      code = 200;
-				      response.getChildren("pubsub").forEach(function(pubsubEl) {
-					  pubsubEl.getChildren("subscription").forEach(function(subscriptionEl) {
-					      el = subscriptionEl;
-					  });
-				      });
-				  } else {
-				      var code = 502;
-				      response.getChildren("error").forEach(function(errorEl) {
-					  el = errorEl;
-					  var codeAttr = errorEl.attrs.code;
-					  if (codeAttr)
-					      code = Number(codeAttr);
-				      });
-				  }
+IqRequest.prototype.onOnline = function() {
+    var self = this;
+    /* Can either be an XML element or a function that generates one
+       with the session */
+    if (typeof self.stanza == 'function')
+	self.stanza = self.stanza(self.session);
+    self.stanza = self.stanza.root();
 
-				  session.unref(reqId);  // one session process less
-				  doneFun(code, el);
-			      });
-    };
-}
+    /* Defaults for all iqs */
+    self.stanza.attrs.to = PUBSUB_SERVICE;
+    self.stanza.attrs.id = self.reqId.toString();
 
-/* req:: HTTP.ServerRequest
-   result:: null or [String, String]
-*/
-function reqAuth(req) {
-    var auth = req.headers['authorization'];
-    if (auth)
-    {
-	var m = /^Basic (\S+)/.exec(auth);
-	if (m[1])
-	{
-	    var up = /^(.+?):(.+)/.exec(base64.decode(m[1]));
-	    var user = up[1], pass = up[2];
-	    return [user, pass];
-	}
-	else
-	    return null;
+    sys.puts("SEND "+self.stanza.toString());
+    /* Send... */
+    self.session.conn.send(self.stanza);
+    /* ...and wait for response */
+    self.session.addIqListener(self.reqId,
+			       function(stanza) { self.onResponse(stanza); });
+};
+
+IqRequest.prototype.onResponse = function(stanza) {
+    if (stanza.attrs.type == "result") {
+	this.res.writeHead(200, {"Content-type": "application/xml"});
+	var result = this.resultFormatter(stanza);
+	this.res.write(result.toString());
+	this.res.flush();
+    } else {
+	var el, code = 502;
+	stanza.getChildren("error").forEach(function(errorEl) {
+	    el = errorEl;
+	    var codeAttr = errorEl.attrs.code;
+	    if (codeAttr)
+		code = Number(codeAttr);
+	});
+	this.res.writeHead(code, {"Content-type": "application/xml"});
+	this.res.write(el.toString());
     }
-    else
-	return null;
+    
+    this.res.end();
+    //session.unref(this.reqId);  // one session process less
+};
+
+
+function pubsubElsToString(stanza) {
+    var r = "";
+    stanza.getChildren("pubsub", NS_PUBSUB).forEach(function(pubsubEl) {
+	pubsubEl.children.forEach(function(el) {
+	    if (el.attrs)
+		el.attrs.xmlns = NS_PUBSUB;
+	    r += el.toString();
+	});
+    });
+    return r;
 }
 
-web.get("/pubsub.xml", function(req, res) {
-	    handleWithSession(req, res, setupStreamATOM);
-	});
-web.get("/pubsub.json", function(req, res) {
-	    handleWithSession(req, res, setupStreamJSON);
-	});
-web.post(/\/subscriptions\/(.+)/, function(req, res, node) {
-	     node = decodeURIComponent(node);
-	     sys.puts("node: "+node);
-	     handleWithSession(req, res,
-			       setupRequest(function(session) {
-						return new xmpp.Element('iq',
-						                        {type: "set"}).
-						    c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
-						    c("subscribe", {node: node,
-						                    jid: session.conn.jid.bare().toString()});
-					    }, function(code, el) {
-						res.writeHead(code, {"Content-type": "application/xml"});
-						if (el)
-						    res.write(el.toString());
-						res.end();
-					    }));
-	 });
-web.del(/\/subscriptions\/(.+)/, function(req, res, node) {
-	    node = decodeURIComponent(node);
-	    sys.puts("node: "+node);
-	    handleWithSession(req, res,
-		setupRequest(function(session) {
-				 return new xmpp.Element('iq', {type: "set"}).
-				     c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
-				     c("unsubscribe", {node: node,
-						       jid: session.conn.jid.bare().toString()});
-			     }, function(code, el) {
-				 res.writeHead(code, {"Content-type": "application/xml"});
-				 if (el)
-				     res.write(el.toString());
-				 res.end();
-			     }));
-	});
+
+web.get("/pubsub.xml", function(req, res) { new AtomStream(req, res); });
+web.get("/pubsub.json", function(req, res) { new JsonStream(req, res); });
+/*web.get(/^\/subscriptions\/?$/, function(req, res) {
+            handleWithSession(req, res,
+			      setupRequest(res, function(session) {
+				  return new xmpp.Element('iq',
+							  {type: "get"}).
+				      c("pubsub", {xmlns: NS_PUBSUB}).
+				      c("subscriptions", {jid: session.conn.jid.bare().toString()});
+			      }));
+        });*/
+web.post(/^\/subscriptions\/(.+)/, function(req, res, node) {
+    node = decodeURIComponent(node);
+    sys.puts("NODE: "+node);
+    new IqRequest(req, res,
+		  function(session) {
+		      return new xmpp.Element('iq', {type: "set"}).
+			  c("pubsub", {xmlns: NS_PUBSUB}).
+			  c("subscribe", {node: node,
+					  jid: session.conn.jid.bare().toString()});
+		  }, pubsubElsToString);
+});
+web.del(/^\/subscriptions\/(.+)/, function(req, res, node) {
+    node = decodeURIComponent(node);
+    new IqRequest(req, res,
+		  function(session) {
+		      return new xmpp.Element('iq', {type: "set"}).
+			  c("pubsub", {xmlns: NS_PUBSUB}).
+			  c("unsubscribe", {node: node,
+					    jid: session.conn.jid.bare().toString()});
+		  }, pubsubElsToString);
+});
 web.listen(8888);
 
