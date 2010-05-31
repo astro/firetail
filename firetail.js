@@ -462,7 +462,7 @@ WalkSubscriptions.prototype.onResponse = function(stanza) {
 	    self.onOnline();
 	} else {
 	    /* Either no superfeedr:page ext or empty list */
-	    self.res.write("</subscriptions>");
+	    self.res.write("</subscriptions>\n");
 	    self.res.end();
 	}
     } else {

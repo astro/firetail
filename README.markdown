@@ -17,6 +17,8 @@ Attach to the ATOM firehose:
 Also available in a Twitter-style JSON format interleaved with line lengths:
     curl -u $CREDS http://localhost:8888/pubsub.json
 
+Retrieve list of subscriptions (streams, supports Superfeedr pagination extension):
+    curl -u $CREDS http://localhost:8888/subscriptions
 Subscribe to a (url-encoded) node:
     curl -u $CREDS -X POST http://localhost:8888/subscriptions/http%3A%2F%2Ftwitter.com%2Fstatuses%2Fuser_timeline%2F61287780.rss
 Unsubscribe from a node:
