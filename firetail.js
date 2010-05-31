@@ -1,16 +1,18 @@
 require.paths.push("deps/node-base64/build/default",
 		   "deps/node-expat/build/default",
-		   "deps/node-xmpp/lib");
+		   "deps/node-xmpp/lib",
+		   "deps/node-router/lib");
 
 var http = require('http');
 var sys = require('sys');
 var xmpp = require("xmpp");
 var base64 = require("base64");
+var web = require('node-router').getServer();
 
 
 var DOMAIN = "superfeedr.com";
 var PUBSUB_SERVICE = "firehoser.superfeedr.com";
-var SUBSCRIBE_PATH = "/subscription/";
+var SUBSCRIBE_PATH = "/subscriptions";
 
 var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 		     geo: 'http://www.georss.org/georss',
@@ -166,7 +168,19 @@ function withSession(account, reqId, cb) {
 }
 
 /* Controllers */
-function handleWithSession(req, res, account, reqId, cb) {
+var nextReqId = 0;
+
+function handleWithSession(req, res, cb) {
+    var reqId = nextReqId;
+    nextReqId++;
+
+    var account = reqAuth(req);
+    if (!account) {
+	res.writeHead(401, {});
+	res.end();
+	return;
+    }
+
     var session = withSession(account, reqId,
 			      function(event, session) {
 				  sys.puts("req " + reqId + " got session with: " + event);
@@ -295,7 +309,7 @@ function setupRequest(iqGenerator, doneFun) {
 					      code = Number(codeAttr);
 				      });
 				  }
-				  
+
 				  session.unref(reqId);  // one session process less
 				  doneFun(code, el);
 			      });
@@ -323,62 +337,44 @@ function reqAuth(req) {
 	return null;
 }
 
-var nextReqId = 0;
-http.createServer(function(req, res) {
-    try {
-	var reqId = nextReqId;
-	nextReqId++;
-
-	sys.puts(req.method + " " + req.url);
-
-	var account = reqAuth(req);
-	if (account) {
-	    if (req.method == "GET" && req.url == "/pubsub.xml") {
-		handleWithSession(req, res, account, reqId, setupStreamATOM);
-	    } else if (req.method == "GET" && req.url == "/pubsub.json") {
-		handleWithSession(req, res, account, reqId, setupStreamJSON);
-	    } else if (req.method == "POST" && req.url.indexOf(SUBSCRIBE_PATH) == 0) {
-		var node = decodeURIComponent(req.url.substr(SUBSCRIBE_PATH.length));
-		sys.puts("node: "+node);
-		handleWithSession(req, res, account, reqId,
-				  setupRequest(function(session) {
-				      return new xmpp.Element('iq',
-							      {type: "set"}).
-					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
-					  c("subscribe", {node: node,
-							  jid: session.conn.jid.bare().toString()});
-				  }, function(code, el) {
-				      res.writeHead(code, {"Content-type": "application/xml"});
-				      if (el)
-					  res.write(el.toString());
-				      res.end();
-				  }));
-	    } else if (req.method == "DELETE" && req.url.indexOf(SUBSCRIBE_PATH) == 0) {
-		var node = decodeURIComponent(req.url.substr(SUBSCRIBE_PATH.length));
-		sys.puts("node: "+node);
-		handleWithSession(req, res, account, reqId,
-				  setupRequest(function(session) {
-				      return new xmpp.Element('iq', {type: "set"}).
-					  c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
-					  c("unsubscribe", {node: node,
-							    jid: session.conn.jid.bare().toString()});
-				  }, function(code, el) {
-				      res.writeHead(code, {"Content-type": "application/xml"});
-				      if (el)
-					  res.write(el.toString());
-				      res.end();
-				  }));
-	    } else {
-		res.writeHead(404, {});
-		res.end();
-	    }
-	}
-	else {
-	    res.writeHead(401, {});
-	    res.end();
-	}
-    } catch (e) {
-	sys.puts(e.name+": "+e.message+" in "+e.fileName+":"+e.lineNumber);
-    }
-}).listen(8888);
+web.get("/pubsub.xml", function(req, res) {
+	    handleWithSession(req, res, setupStreamATOM);
+	});
+web.get("/pubsub.json", function(req, res) {
+	    handleWithSession(req, res, setupStreamJSON);
+	});
+web.post(/\/subscriptions\/(.+)/, function(req, res, node) {
+	     node = decodeURIComponent(node);
+	     sys.puts("node: "+node);
+	     handleWithSession(req, res,
+			       setupRequest(function(session) {
+						return new xmpp.Element('iq',
+						                        {type: "set"}).
+						    c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
+						    c("subscribe", {node: node,
+						                    jid: session.conn.jid.bare().toString()});
+					    }, function(code, el) {
+						res.writeHead(code, {"Content-type": "application/xml"});
+						if (el)
+						    res.write(el.toString());
+						res.end();
+					    }));
+	 });
+web.del(/\/subscriptions\/(.+)/, function(req, res, node) {
+	    node = decodeURIComponent(node);
+	    sys.puts("node: "+node);
+	    handleWithSession(req, res,
+		setupRequest(function(session) {
+				 return new xmpp.Element('iq', {type: "set"}).
+				     c("pubsub", {xmlns: 'http://jabber.org/protocol/pubsub'}).
+				     c("unsubscribe", {node: node,
+						       jid: session.conn.jid.bare().toString()});
+			     }, function(code, el) {
+				 res.writeHead(code, {"Content-type": "application/xml"});
+				 if (el)
+				     res.write(el.toString());
+				 res.end();
+			     }));
+	});
+web.listen(8888);
 
