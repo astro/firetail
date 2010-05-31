@@ -13,6 +13,7 @@ var web = require('node-router').getServer();
 var DOMAIN = "superfeedr.com";
 var PUBSUB_SERVICE = "firehoser.superfeedr.com";
 var NS_PUBSUB = 'http://jabber.org/protocol/pubsub';
+var NS_EXT = 'http://superfeedr.com/xmpp-pubsub-ext';
 
 var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 		     geo: 'http://www.georss.org/georss',
@@ -112,7 +113,7 @@ function Session(account) {
     this.onNotification = function(id, cb) { notifyCallbacks[id] = cb; };
     this.conn.addListener('stanza',
 			  function(stanza) {
-			      sys.puts('STANZA: '+stanza.toString());
+			      //sys.puts('STANZA: '+stanza.toString());
 			      if (stanza.is('message')) {
 				  stanza.getChildren("event").forEach(function(eventEl) {
 				      eventEl.getChildren("items").forEach(function(itemsEl) {
@@ -136,8 +137,14 @@ function Session(account) {
 					 stanza.attrs.from == PUBSUB_SERVICE) {
 				  var id = stanza.attrs.id;
 				  if (iqCallbacks[id]) {
-				      iqCallbacks[id](stanza);
+				      /* First delete, to allow the
+				       * callback to reattach itself
+				       * with the same iq id again
+				       * (serial requests).
+				       */
+				      var cb = iqCallbacks[id];
 				      delete iqCallbacks[id];
+				      cb(stanza);
 				  }
 			      }
 			  });
@@ -358,22 +365,23 @@ sys.inherits(IqRequest, Action);
 
 IqRequest.prototype.onOnline = function() {
     var self = this;
+    var stanza = self.stanza;
     /* Can either be an XML element or a function that generates one
        with the session */
-    if (typeof self.stanza == 'function')
-	self.stanza = self.stanza(self.session);
-    self.stanza = self.stanza.root();
+    if (typeof stanza == 'function')
+	stanza = stanza(self.session);
+    stanza = stanza.root();
 
     /* Defaults for all iqs */
-    self.stanza.attrs.to = PUBSUB_SERVICE;
-    self.stanza.attrs.id = self.reqId.toString();
+    stanza.attrs.to = PUBSUB_SERVICE;
+    stanza.attrs.id = self.reqId.toString();
 
-    sys.puts("SEND "+self.stanza.toString());
+    sys.puts("SEND "+stanza.toString());
     /* Send... */
-    self.session.conn.send(self.stanza);
+    self.session.conn.send(stanza);
     /* ...and wait for response */
     self.session.addIqListener(self.reqId,
-			       function(stanza) { self.onResponse(stanza); });
+			       function(response) { self.onResponse(response); });
 };
 
 IqRequest.prototype.onResponse = function(stanza) {
@@ -412,17 +420,71 @@ function pubsubElsToString(stanza) {
 }
 
 
+function WalkSubscriptions(req, res) {
+    var self = this;
+    self.page = 1;
+    IqRequest.call(this, req, res, function(session) {
+	return new xmpp.Element('iq', {type: "get"}).
+	    c("pubsub", {xmlns: NS_PUBSUB,
+			 'xmlns:superfeedr': NS_EXT}).
+	    c("subscriptions", {jid: session.conn.jid.bare().toString(),
+				'superfeedr:page': self.page.toString()});
+    }, null);
+}
+sys.inherits(WalkSubscriptions, IqRequest);
+
+WalkSubscriptions.prototype.onResponse = function(stanza) {
+    sys.puts("WalkSubscriptions response: "+stanza.toString());
+    var self = this;
+    if (stanza.attrs.type == "result") {
+	if (self.page == 1) {
+	    self.res.writeHead(200, {"Content-type": "application/xml"});
+	    self.res.write("<subscriptions xmlns='" + NS_PUBSUB +
+			   " xmlns:superfeedr='" + NS_EXT +
+			   "'>\n");
+	}
+	var subscriptions = 0, page_ext = false;
+	stanza.getChildren("pubsub", NS_PUBSUB).forEach(
+	    function(pubsubEl) {
+		pubsubEl.getChildren("subscriptions", NS_PUBSUB).forEach(
+		    function(subscriptionsEl) {
+			page_ext = page_ext || (subscriptionsEl.attrs['superfeedr:page'] == self.page.toString());
+			subscriptions += subscriptionsEl.getChildren("subscription").length;
+			subscriptionsEl.children.forEach(function(child) {
+			    self.res.write(child.toString());
+			});
+		    });
+	    });
+	self.res.flush();
+	if (page_ext && subscriptions > 0) {
+	    /* No empty list, more to come on next page */
+	    self.page++;
+	    self.onOnline();
+	} else {
+	    /* Either no superfeedr:page ext or empty list */
+	    self.res.write("</subscriptions>");
+	    self.res.end();
+	}
+    } else {
+	var el, code = 502;
+	stanza.getChildren("error").forEach(function(errorEl) {
+	    el = errorEl;
+	    var codeAttr = errorEl.attrs.code;
+	    if (codeAttr)
+		code = Number(codeAttr);
+	});
+	self.res.writeHead(code, {"Content-type": "application/xml"});
+	self.res.write(el.toString());
+	self.res.end();
+    }
+};
+
+
 web.get("/pubsub.xml", function(req, res) { new AtomStream(req, res); });
 web.get("/pubsub.json", function(req, res) { new JsonStream(req, res); });
-/*web.get(/^\/subscriptions\/?$/, function(req, res) {
-            handleWithSession(req, res,
-			      setupRequest(res, function(session) {
-				  return new xmpp.Element('iq',
-							  {type: "get"}).
-				      c("pubsub", {xmlns: NS_PUBSUB}).
-				      c("subscriptions", {jid: session.conn.jid.bare().toString()});
-			      }));
-        });*/
+web.get(/^\/subscriptions\/?$/, function(req, res) {
+    new WalkSubscriptions(req, res);
+});
 web.post(/^\/subscriptions\/(.+)/, function(req, res, node) {
     node = decodeURIComponent(node);
     sys.puts("NODE: "+node);
