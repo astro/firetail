@@ -280,7 +280,6 @@ AtomStream.prototype.onOnline = function() {
 	this.res.write("=\""+defaultXmlns[prefix]+"\"");
     }
     this.res.write(">\n");
-    this.res.flush();
 };
 
 AtomStream.prototype.onNotification = function(node, entries) {
@@ -294,7 +293,6 @@ AtomStream.prototype.onNotification = function(node, entries) {
 	entry.write(function(s) { self.res.write(s); });
 	self.res.write("\n");
     });
-    self.res.flush();
 };
 
 function JsonStream(req, res) {
@@ -304,7 +302,6 @@ sys.inherits(JsonStream, Action);
 
 JsonStream.prototype.onOnline = function() {
     this.res.writeHead(200, {'Content-type': 'application/json'});
-    this.res.flush();
     this.res._hasBody = true;
 };
 
@@ -351,7 +348,6 @@ JsonStream.prototype.onNotification = function(node, entries) {
 	var line = JSON.stringify(json) + "\n";
 	self.res.write(line.length + "\n" + line);
     });
-    self.res.flush();
 };
 
 function IqRequest(req, res, stanza, resultFormatter) {
@@ -389,7 +385,6 @@ IqRequest.prototype.onResponse = function(stanza) {
 	this.res.writeHead(200, {"Content-type": "application/xml"});
 	var result = this.resultFormatter(stanza);
 	this.res.write(result.toString());
-	this.res.flush();
     } else {
 	var el, code = 502;
 	stanza.getChildren("error").forEach(function(errorEl) {
@@ -401,7 +396,7 @@ IqRequest.prototype.onResponse = function(stanza) {
 	this.res.writeHead(code, {"Content-type": "application/xml"});
 	this.res.write(el.toString());
     }
-    
+
     this.res.end();
     //session.unref(this.reqId);  // one session process less
 };
@@ -455,7 +450,6 @@ WalkSubscriptions.prototype.onResponse = function(stanza) {
 			});
 		    });
 	    });
-	self.res.flush();
 	if (page_ext && subscriptions > 0) {
 	    /* No empty list, more to come on next page */
 	    self.page++;
