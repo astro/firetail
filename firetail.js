@@ -98,9 +98,13 @@ function Session(account) {
     this.conn.addListener('error',
 			  function() {
 		              session.ready('error');
+			      for(var id in endCallbacks) {
+				  endCallbacks[id]();
+			      }
 			  });
     this.conn.addListener('end',
 			  function() {
+		              session.ready('error');
 			      for(var id in endCallbacks) {
 				  endCallbacks[id]();
 			      }
@@ -226,7 +230,7 @@ function Action(req, res) {
 
     self.session = withSession(account, self.reqId, function(event, session) { self.onSession(event, session); });
     /* Catch XMPP session termination */
-    self.session.onEnd(self.reqId, res.end);
+    self.session.onEnd(self.reqId, function() { res.end(); });
 
     /* Catch HTTP request termination */
     req.socket.addListener('end',
@@ -237,7 +241,7 @@ function Action(req, res) {
     req.socket.addListener('error',
 			   function(e) {
 			       sys.puts(self.reqId+" req socket error: "+e);
-			       //self.session.unref(self.reqId);  // needed?
+			       self.session.unref(self.reqId);
 			   });
 }
 Action.prototype.onSession = function(event, session) {
@@ -372,7 +376,6 @@ IqRequest.prototype.onOnline = function() {
     stanza.attrs.to = PUBSUB_SERVICE;
     stanza.attrs.id = self.reqId.toString();
 
-    sys.puts("SEND "+stanza.toString());
     /* Send... */
     self.session.conn.send(stanza);
     /* ...and wait for response */
@@ -429,7 +432,6 @@ function WalkSubscriptions(req, res) {
 sys.inherits(WalkSubscriptions, IqRequest);
 
 WalkSubscriptions.prototype.onResponse = function(stanza) {
-    sys.puts("WalkSubscriptions response: "+stanza.toString());
     var self = this;
     if (stanza.attrs.type == "result") {
 	if (self.page == 1) {
