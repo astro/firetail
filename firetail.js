@@ -21,6 +21,9 @@ var defaultXmlns = { '': 'http://www.w3.org/2005/Atom',
 		     sf: 'http://superfeedr.com/xmpp-pubsub-ext'
 		   };
 
+/* Keep sessions open somewhat longer for batches of non-concurrent
+   requests */
+var SESSION_LINGER = 1000; // ms
 
 xmpp.Element.prototype.stripXmlns = function(parentXmlns) {
     for(var prefix in parentXmlns) {
@@ -158,20 +161,30 @@ function Session(account) {
     };
 
     /* Individual un-using, with shutdown */
-    this.unref = function(id) {
-	delete readyCallbacks[id];
-	delete notifyCallbacks[id];
-	delete iqCallbacks[id.toString()];
+    this.unref = function(id, lingered) {
+	if (id) {
+	    delete readyCallbacks[id];
+	    delete endCallbacks[id];
+	    delete notifyCallbacks[id];
+	    delete iqCallbacks[id.toString()];
+	}
 
 	/* Are callbacks still registered? */
 	for(var id in readyCallbacks)
 	    return;
 	for(var id in notifyCallbacks)
 	    return;
+	for(var id in iqCallbacks)
+	    return;
 	/* No: */
-	sys.puts("Shutdown for "+account[0]);
-	sessions[account] = null;
-	this.conn.end();
+	if (!lingered) {
+	    var self = this;
+	    self.endTimer = setTimeout(function() { self.unref(null, true); }, SESSION_LINGER);
+	} else {
+	    sys.puts("Shutdown for "+account[0]);
+	    sessions[account] = null;
+	    this.conn.end();
+	}
     };
 }
 
@@ -180,6 +193,8 @@ function withSession(account, reqId, cb) {
     var session = sessions[account];
     if (!session)
 	sessions[account] = session = new Session(account);
+    else if (session.endTimer)
+	clearTimeout(session.endTimer);
     session.onReady(reqId,
 		    function(event) {
 			sys.puts("event " + event);
@@ -230,7 +245,7 @@ function Action(req, res) {
 
     self.session = withSession(account, self.reqId, function(event, session) { self.onSession(event, session); });
     /* Catch XMPP session termination */
-    self.session.onEnd(self.reqId, function() { res.end(); });
+    self.session.onEnd(self.reqId, function() { sys.puts("onEnd"); res.end(); });
 
     /* Catch HTTP request termination */
     req.socket.addListener('end',
