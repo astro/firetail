@@ -11,7 +11,7 @@ Use a fairly recent version of node.js and run:
     git submodule init
     git submodule update
     ./bootstrap.sh
-    node.js
+    node firetail.js
 
 ## Usage
 First, set your Superfeedr.com credentials:
