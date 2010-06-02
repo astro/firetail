@@ -400,9 +400,12 @@ IqRequest.prototype.onOnline = function() {
 
 IqRequest.prototype.onResponse = function(stanza) {
     if (stanza.attrs.type == "result") {
-	this.res.writeHead(200, {"Content-type": "application/xml"});
-	var result = this.resultFormatter(stanza);
-	this.res.write(result.toString());
+	var self = this;
+	self.res.writeHead(200, {"Content-type": "application/xml"});
+	self.resultFormatter(stanza,
+			     function(s) {
+				 self.res.write(s);
+			     });
     } else {
 	var el, code = 502;
 	stanza.getChildren("error").forEach(function(errorEl) {
@@ -420,18 +423,40 @@ IqRequest.prototype.onResponse = function(stanza) {
 };
 
 
-function pubsubElsToString(stanza) {
-    var r = "";
+function pubsubElsToString(stanza, writer) {
     stanza.getChildren("pubsub", NS_PUBSUB).forEach(function(pubsubEl) {
 	pubsubEl.children.forEach(function(el) {
 	    if (el.attrs)
 		el.attrs.xmlns = NS_PUBSUB;
-	    r += el.toString();
+	    writer(el.toString());
 	});
     });
-    return r;
 }
 
+function pubsubItemsToFeed(stanza, writer) {
+    writer("<feed");
+    for(var prefix in defaultXmlns) {
+	writer(" xmlns");
+	if (prefix != '')
+	    writer(":"+prefix);
+	writer("=\""+defaultXmlns[prefix]+"\"");
+    }
+    writer(">\n");
+
+    stanza.getChildren("pubsub", NS_PUBSUB).forEach(function(eventEl) {
+	eventEl.getChildren("items").forEach(function(itemsEl) {
+	    itemsEl.getChildren("item").forEach(function(itemEl) {
+		itemEl.getChildren("entry").forEach(function(entryEl) {
+		    entryEl.stripXmlns(defaultXmlns);
+		    entryEl.write(function(s) { writer(s); });
+		    writer("\n");
+		});
+	    });
+	});
+    });
+
+    writer("</feed>\n");
+}
 
 function WalkSubscriptions(req, res) {
     var self = this;
@@ -493,7 +518,15 @@ WalkSubscriptions.prototype.onResponse = function(stanza) {
 
 web.get("/pubsub.xml", function(req, res) { new AtomStream(req, res); });
 web.get("/pubsub.json", function(req, res) { new JsonStream(req, res); });
-web.get(/^\/subscriptions\/?$/, function(req, res) {
+web.get("/archive/(.+)", function(req, res, node) {
+    node = decodeURIComponent(node);
+    new IqRequest(req, res,
+		  new xmpp.Element('iq', {type: "get"}).
+		      c("pubsub", {xmlns: NS_PUBSUB}).
+		      c("items", {node: node}),
+		  pubsubItemsToFeed);
+});
+web.get(/^\/subscriptions/, function(req, res) {
     new WalkSubscriptions(req, res);
 });
 web.post(/^\/subscriptions\/(.+)/, function(req, res, node) {
