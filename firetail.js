@@ -179,6 +179,8 @@ function Session(account) {
 	/* No: */
 	if (!lingered) {
 	    var self = this;
+	    if (self.endTimer)
+		clearTimeout(self.endTimer);
 	    self.endTimer = setTimeout(function() { self.unref(null, true); }, SESSION_LINGER);
 	} else {
 	    sys.puts("Shutdown for "+account[0]);
@@ -251,11 +253,6 @@ function Action(req, res) {
     req.socket.addListener('end',
 			   function() {
 			       sys.puts(self.reqId+" req end");
-			       self.session.unref(self.reqId);
-			   });
-    req.socket.addListener('error',
-			   function(e) {
-			       sys.puts(self.reqId+" req socket error: "+e);
 			       self.session.unref(self.reqId);
 			   });
 }
