@@ -157,7 +157,7 @@ function Session(account) {
 			  });
 
     this.addIqListener = function(id, cb) {
-	iqCallbacks[id.toString()] = cb;
+	iqCallbacks[id] = cb;
     };
 
     /* Individual un-using, with shutdown */
@@ -240,7 +240,7 @@ function Action(req, res) {
     }
 
     self.res = res;
-    self.reqId = nextReqId;
+    self.reqId = nextReqId.toString();
     nextReqId++;
 
     self.session = withSession(account, self.reqId, function(event, session) { self.onSession(event, session); });
@@ -389,7 +389,7 @@ IqRequest.prototype.onOnline = function() {
 
     /* Defaults for all iqs */
     stanza.attrs.to = PUBSUB_SERVICE;
-    stanza.attrs.id = self.reqId.toString();
+    stanza.attrs.id = self.reqId;
 
     /* Send... */
     self.session.conn.send(stanza);
