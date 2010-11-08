@@ -1,11 +1,7 @@
-require.paths.push("deps/node-expat/build/default",
-		   "deps/node-xmpp/lib",
-		   "deps/node-router/lib");
-
 var http = require('http');
 var sys = require('sys');
-var xmpp = require("xmpp");
-var web = require('node-router').getServer();
+var xmpp = require("node-xmpp");
+var Connect = require('connect');
 
 
 var DOMAIN = "superfeedr.com";
@@ -511,39 +507,45 @@ WalkSubscriptions.prototype.onResponse = function(stanza) {
 };
 
 
-web.get("/pubsub.xml", function(req, res) { new AtomStream(req, res); });
-web.get("/pubsub.json", function(req, res) { new JsonStream(req, res); });
-web.get("/archive/(.+)", function(req, res, node) {
-    node = decodeURIComponent(node);
-    new IqRequest(req, res,
-		  new xmpp.Element('iq', {type: "get"}).
-		      c("pubsub", {xmlns: NS_PUBSUB}).
-		      c("items", {node: node}),
-		  pubsubItemsToFeed);
-});
-web.get(/^\/subscriptions/, function(req, res) {
-    new WalkSubscriptions(req, res);
-});
-web.post(/^\/subscriptions\/(.+)/, function(req, res, node) {
-    node = decodeURIComponent(node);
-    sys.puts("NODE: "+node);
-    new IqRequest(req, res,
-		  function(session) {
-		      return new xmpp.Element('iq', {type: "set"}).
-			  c("pubsub", {xmlns: NS_PUBSUB}).
-			  c("subscribe", {node: node,
-					  jid: session.conn.jid.bare().toString()});
-		  }, pubsubElsToString);
-});
-web.del(/^\/subscriptions\/(.+)/, function(req, res, node) {
-    node = decodeURIComponent(node);
-    new IqRequest(req, res,
-		  function(session) {
-		      return new xmpp.Element('iq', {type: "set"}).
-			  c("pubsub", {xmlns: NS_PUBSUB}).
-			  c("unsubscribe", {node: node,
-					    jid: session.conn.jid.bare().toString()});
-		  }, pubsubElsToString);
-});
-web.listen(8888);
+var Connect = require('connect');
+Connect.createServer(
+    Connect.logger(),
+    Connect.router(function(app) {
+        app.get("/pubsub.xml", function(req, res) { new AtomStream(req, res); });
+        app.get("/pubsub.json", function(req, res) { new JsonStream(req, res); });
+        app.get("/archive/(.+)", function(req, res, node) {
+                    node = decodeURIComponent(node);
+                    new IqRequest(req, res,
+                                  new xmpp.Element('iq', {type: "get"}).
+                                  c("pubsub", {xmlns: NS_PUBSUB}).
+                                  c("items", {node: node}),
+                                  pubsubItemsToFeed);
+                });
+        app.get(/^\/subscriptions/, function(req, res) {
+                    new WalkSubscriptions(req, res);
+                });
+        app.post(/^\/subscriptions\/(.+)/, function(req, res) {
+                     node = req.params[0];
+                     sys.puts("NODE: "+node);
+                     new IqRequest(req, res,
+                                   function(session) {
+                                       return new xmpp.Element('iq', {type: "set"}).
+                                           c("pubsub", {xmlns: NS_PUBSUB}).
+                                           c("subscribe", {node: node,
+                                                           jid: session.conn.jid.bare().toString()});
+                                   }, pubsubElsToString);
+                 });
+        app.del(/^\/subscriptions\/(.+)/, function(req, res) {
+                    node = req.params[0];
+                    new IqRequest(req, res,
+                                  function(session) {
+                                      return new xmpp.Element('iq', {type: "set"}).
+                                          c("pubsub", {xmlns: NS_PUBSUB}).
+                                          c("unsubscribe", {node: node,
+                                                            jid: session.conn.jid.bare().toString()});
+                                  }, pubsubElsToString);
+                });
+    }),
+    Connect.errorHandler({ dumpExceptions: true, showStack: true })
+).listen(8888);
 

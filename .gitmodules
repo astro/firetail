@@ -1,9 +1,0 @@
-[submodule "deps/node-expat"]
-	path = deps/node-expat
-	url = git://github.com/astro/node-expat.git
-[submodule "deps/node-xmpp"]
-	path = deps/node-xmpp
-	url = git://github.com/astro/node-xmpp.git
-[submodule "deps/node-router"]
-	path = deps/node-router
-	url = git://github.com/creationix/node-router.git
