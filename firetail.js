@@ -1,12 +1,10 @@
-require.paths.push("deps/node-base64/build/default",
-		   "deps/node-expat/build/default",
+require.paths.push("deps/node-expat/build/default",
 		   "deps/node-xmpp/lib",
 		   "deps/node-router/lib");
 
 var http = require('http');
 var sys = require('sys');
 var xmpp = require("xmpp");
-var base64 = require("base64");
 var web = require('node-router').getServer();
 
 
@@ -216,7 +214,7 @@ function reqAuth(req) {
 	var m = /^Basic (\S+)/.exec(auth);
 	if (m[1])
 	{
-	    var up = /^(.+?):(.+)/.exec(base64.decode(m[1]));
+	    var up = /^(.+?):(.+)/.exec(new Buffer(m[1], 'base64').toString());
 	    var user = up[1], pass = up[2];
 	    return [user, pass];
 	}
